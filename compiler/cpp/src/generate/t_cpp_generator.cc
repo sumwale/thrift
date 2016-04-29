@@ -29,6 +29,9 @@
 #include <string>
 #include <vector>
 
+#include <algorithm>
+#include <cctype>
+
 #include <sys/stat.h>
 
 #include "platform.h"
@@ -63,6 +66,7 @@ public:
     gen_no_default_operators_ = false;
     gen_templates_ = false;
     gen_templates_only_ = false;
+    gen_separate_struct_ = false;
     gen_moveable_ = false;
     for( iter = parsed_options.begin(); iter != parsed_options.end(); ++iter) {
       if( iter->first.compare("pure_enums") == 0) {
@@ -78,6 +82,8 @@ public:
       } else if( iter->first.compare("templates") == 0) {
         gen_templates_ = true;
         gen_templates_only_ = (iter->second == "only");
+      } else if( iter->first.compare("struct_separate_files") == 0) {
+        gen_separate_struct_ = true;
       } else if( iter->first.compare("moveable_types") == 0) {
         gen_moveable_ = true;
       } else {
@@ -93,7 +99,15 @@ public:
    */
 
   void init_generator();
+  void init_includes(std::ofstream& f_gen);
+  void init_generator(std::ofstream& f_gen_h,
+      std::ofstream& f_gen_impl, std::ofstream& f_gen_tcc,
+      const std::string& f_gen_prefix, const bool is_types,
+      const bool is_exception);
   void close_generator();
+  void close_generator(std::ofstream& f_gen_h,
+      std::ofstream& f_gen_impl, std::ofstream& f_gen_tcc,
+      const std::string& f_gen_prefix);
 
   void generate_consts(std::vector<t_const*> consts);
 
@@ -107,9 +121,11 @@ public:
   void generate_struct(t_struct* tstruct) { generate_cpp_struct(tstruct, false); }
   void generate_xception(t_struct* txception) { generate_cpp_struct(txception, true); }
   void generate_cpp_struct(t_struct* tstruct, bool is_exception);
+  void generate_cpp_struct_separate_files(t_struct* tstruct, bool is_exception);
 
   void generate_service(t_service* tservice);
 
+  bool is_static_const(t_type* type);
   void print_const_value(std::ofstream& out, std::string name, t_type* type, t_const_value* value);
   std::string render_const_value(std::ofstream& out,
                                  std::string name,
@@ -250,6 +266,8 @@ public:
 
   bool is_reference(t_field* tfield) { return tfield->get_reference(); }
 
+  std::string make_valid_filename(const std::string& fromName);
+
   bool is_complex_type(t_type* ttype) {
     ttype = get_true_type(ttype);
 
@@ -310,6 +328,17 @@ private:
   bool gen_no_default_operators_;
 
   /**
+   * True if we should generate each struct in a separate files instead
+   * of in _types.* files.
+   */
+  bool gen_separate_struct_;
+
+  /**
+   * The set of exception object headers. Only included by service files.
+   */
+  std::vector<std::string> program_exception_includes_;
+
+  /**
    * Strings for namespace, computed once up front then used directly
    */
 
@@ -324,6 +353,9 @@ private:
   std::ofstream f_types_;
   std::ofstream f_types_impl_;
   std::ofstream f_types_tcc_;
+  std::ofstream f_struct_;
+  std::ofstream f_struct_impl_;
+  std::ofstream f_struct_tcc_;
   std::ofstream f_header_;
   std::ofstream f_service_;
   std::ofstream f_service_tcc_;
@@ -359,101 +391,166 @@ void t_cpp_generator::init_generator() {
     f_types_tcc_.open(f_types_tcc_name.c_str());
   }
 
+  // Open namespace
+  ns_open_ = namespace_open(program_->get_namespace("cpp"));
+  ns_close_ = namespace_close(program_->get_namespace("cpp"));
+
+  // Initialize the header, impl, tcc files
+  init_generator(f_types_, f_types_impl_, f_types_tcc_,
+      program_name_ + "_types", true, false);
+}
+
+void t_cpp_generator::init_includes(std::ofstream& f_gen) {
+  // Include base types
+  f_gen << "#include <iosfwd>" << endl
+        << endl
+        << "#include <thrift/Thrift.h>" << endl
+        << "#include <thrift/TApplicationException.h>" << endl
+        << "#include <thrift/TBase.h>" << endl
+        << "#include <thrift/protocol/TProtocol.h>" << endl
+        << "#include <thrift/transport/TTransport.h>" << endl
+        << endl;
+  // Include C++xx compatibility header
+  f_gen << "#include <thrift/cxxfunctional.h>" << endl;
+}
+
+/**
+ * Prepares for file generation by opening up the necessary file output
+ * streams.
+ */
+void t_cpp_generator::init_generator(std::ofstream& f_gen_h,
+    std::ofstream& f_gen_impl, std::ofstream& f_gen_tcc,
+    const std::string& f_gen_prefix, const bool is_types,
+    const bool is_exception) {
+
   // Print header
-  f_types_ << autogen_comment();
-  f_types_impl_ << autogen_comment();
-  f_types_tcc_ << autogen_comment();
+  f_gen_h << autogen_comment();
+  f_gen_impl << autogen_comment();
+  f_gen_tcc << autogen_comment();
 
   // Start ifndef
-  f_types_ << "#ifndef " << program_name_ << "_TYPES_H" << endl << "#define " << program_name_
-           << "_TYPES_H" << endl << endl;
-  f_types_tcc_ << "#ifndef " << program_name_ << "_TYPES_TCC" << endl << "#define " << program_name_
-               << "_TYPES_TCC" << endl << endl;
+  std::string f_prefix = f_gen_prefix;
+  std::transform(f_prefix.begin(), f_prefix.end(), f_prefix.begin(), ::toupper);
+  f_gen_h << "#ifndef " << f_prefix << "_H" << endl
+          << "#define " << f_prefix << "_H" << endl << endl;
+  f_gen_tcc << "#ifndef " << f_prefix << "_TCC" << endl
+            << "#define " << f_prefix << "_TCC" << endl << endl;
 
-  // Include base types
-  f_types_ << "#include <iosfwd>" << endl
-           << endl
-           << "#include <thrift/Thrift.h>" << endl
-           << "#include <thrift/TApplicationException.h>" << endl
-           << "#include <thrift/TBase.h>" << endl
-           << "#include <thrift/protocol/TProtocol.h>" << endl
-           << "#include <thrift/transport/TTransport.h>" << endl
-           << endl;
-  // Include C++xx compatibility header
-  f_types_ << "#include <thrift/cxxfunctional.h>" << endl;
+  if (is_types) {
+    if (!gen_separate_struct_) {
+      init_includes(f_gen_h);
+    } else {
+      // Base headers and forward declaration for TProtocol
+      f_gen_h << endl
+              << "#include <string>" << endl
+              << "#include <map>" << endl
+              << "#include <list>" << endl
+              << "#include <set>" << endl
+              << "#include <vector>" << endl
+              << "#include <exception>" << endl
+              << "#include <typeinfo>" << endl
+              << endl
+              << "#include <boost/cstdint.hpp>" << endl << endl;
+
+      f_gen_h << "namespace apache { namespace thrift { namespace protocol {" << endl
+              << "  class TProtocol;" << endl
+              << "}}}" << endl;
+    }
+  } else if (is_exception && gen_separate_struct_) {
+    f_gen_h << "#include <thrift/TApplicationException.h>" << endl;
+  }
 
   // Include other Thrift includes
   const vector<t_program*>& includes = program_->get_includes();
   for (size_t i = 0; i < includes.size(); ++i) {
-    f_types_ << "#include \"" << get_include_prefix(*(includes[i])) << includes[i]->get_name()
+    f_gen_h << "#include \"" << get_include_prefix(*(includes[i])) << includes[i]->get_name()
              << "_types.h\"" << endl;
 
     // XXX(simpkins): If gen_templates_ is enabled, we currently assume all
     // included files were also generated with templates enabled.
-    f_types_tcc_ << "#include \"" << get_include_prefix(*(includes[i])) << includes[i]->get_name()
+    f_gen_tcc << "#include \"" << get_include_prefix(*(includes[i])) << includes[i]->get_name()
                  << "_types.tcc\"" << endl;
   }
-  f_types_ << endl;
+  f_gen_h << endl;
 
   // Include custom headers
   const vector<string>& cpp_includes = program_->get_cpp_includes();
   for (size_t i = 0; i < cpp_includes.size(); ++i) {
     if (cpp_includes[i][0] == '<') {
-      f_types_ << "#include " << cpp_includes[i] << endl;
+      f_gen_h << "#include " << cpp_includes[i] << endl;
     } else {
-      f_types_ << "#include \"" << cpp_includes[i] << "\"" << endl;
+      f_gen_h << "#include \"" << cpp_includes[i] << "\"" << endl;
     }
   }
-  f_types_ << endl;
+  f_gen_h << endl;
 
-  // Include the types file
-  f_types_impl_ << "#include \"" << get_include_prefix(*get_program()) << program_name_
-                << "_types.h\"" << endl << endl;
-  f_types_tcc_ << "#include \"" << get_include_prefix(*get_program()) << program_name_
-               << "_types.h\"" << endl << endl;
+  string include_prefix = get_include_prefix(*get_program());
+
+  // Include the types file if required
+  if (!is_types) {
+    f_gen_h << "#include \"" << include_prefix << program_name_
+            << "_types.h\"" << endl << endl;
+  }
+
+  // Include the header files
+  if (gen_separate_struct_) {
+    init_includes(f_gen_impl);
+  }
+  f_gen_impl << "#include \"" << include_prefix << f_gen_prefix
+             << ".h\"" << endl << endl;
+  if (gen_separate_struct_) {
+    init_includes(f_gen_tcc);
+  }
+  f_gen_tcc << "#include \"" << include_prefix << f_gen_prefix
+            << ".h\"" << endl << endl;
 
   // The swap() code needs <algorithm> for std::swap()
-  f_types_impl_ << "#include <algorithm>" << endl;
+  f_gen_impl << "#include <algorithm>" << endl;
   // for operator<<
-  f_types_impl_ << "#include <ostream>" << endl << endl;
-  f_types_impl_ << "#include <thrift/TToString.h>" << endl << endl;
+  f_gen_impl << "#include <ostream>" << endl << endl;
+  f_gen_impl << "#include <thrift/TToString.h>" << endl << endl;
 
   // Open namespace
-  ns_open_ = namespace_open(program_->get_namespace("cpp"));
-  ns_close_ = namespace_close(program_->get_namespace("cpp"));
-
-  f_types_ << ns_open_ << endl << endl;
-
-  f_types_impl_ << ns_open_ << endl << endl;
-
-  f_types_tcc_ << ns_open_ << endl << endl;
+  f_gen_h << ns_open_ << endl << endl;
+  f_gen_impl << ns_open_ << endl << endl;
+  f_gen_tcc << ns_open_ << endl << endl;
 }
 
 /**
  * Closes the output files.
  */
 void t_cpp_generator::close_generator() {
+  close_generator(f_types_, f_types_impl_, f_types_tcc_,
+      program_name_ + "_types");
+}
+
+/**
+ * Closes the output files.
+ */
+void t_cpp_generator::close_generator(std::ofstream& f_gen_h,
+      std::ofstream& f_gen_impl, std::ofstream& f_gen_tcc,
+      const std::string& f_gen_prefix) {
   // Close namespace
-  f_types_ << ns_close_ << endl << endl;
-  f_types_impl_ << ns_close_ << endl;
-  f_types_tcc_ << ns_close_ << endl << endl;
+  f_gen_h << ns_close_ << endl << endl;
+  f_gen_impl << ns_close_ << endl;
+  f_gen_tcc << ns_close_ << endl << endl;
 
   // Include the types.tcc file from the types header file,
   // so clients don't have to explicitly include the tcc file.
   // TODO(simpkins): Make this a separate option.
   if (gen_templates_) {
-    f_types_ << "#include \"" << get_include_prefix(*get_program()) << program_name_
-             << "_types.tcc\"" << endl << endl;
+    f_gen_h << "#include \"" << get_include_prefix(*get_program()) << f_gen_prefix
+            << ".tcc\"" << endl << endl;
   }
 
   // Close ifndef
-  f_types_ << "#endif" << endl;
-  f_types_tcc_ << "#endif" << endl;
+  f_gen_h << "#endif" << endl;
+  f_gen_tcc << "#endif" << endl;
 
   // Close output file
-  f_types_.close();
-  f_types_impl_.close();
-  f_types_tcc_.close();
+  f_gen_h.close();
+  f_gen_impl.close();
+  f_gen_tcc.close();
 }
 
 /**
@@ -574,7 +671,14 @@ void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
   for (c_iter = consts.begin(); c_iter != consts.end(); ++c_iter) {
     string name = (*c_iter)->get_name();
     t_type* type = (*c_iter)->get_type();
-    f_consts << indent() << type_name(type) << " " << name << ";" << endl;
+    if (is_static_const(get_true_type(type))) {
+      string value = render_const_value(f_consts, name, type,
+          (*c_iter)->get_value());
+      f_consts << indent() << "static const " << type_name(type)
+               << " " << name << " = " << value << ";" << endl;
+    } else {
+      f_consts << indent() << type_name(type) << " " << name << ";" << endl;
+    }
   }
   indent_down();
   f_consts << "};" << endl;
@@ -584,9 +688,13 @@ void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
                 << "Constants() {" << endl;
   indent_up();
   for (c_iter = consts.begin(); c_iter != consts.end(); ++c_iter) {
+    t_type* type = (*c_iter)->get_type();
+    if (is_static_const(get_true_type(type))) {
+      continue;
+    }
     print_const_value(f_consts_impl,
                       (*c_iter)->get_name(),
-                      (*c_iter)->get_type(),
+                      type,
                       (*c_iter)->get_value());
   }
   indent_down();
@@ -597,6 +705,27 @@ void t_cpp_generator::generate_consts(std::vector<t_const*> consts) {
   f_consts.close();
 
   f_consts_impl << endl << ns_close_ << endl << endl;
+}
+
+/**
+ * Returns true if the type can be declared as a "static const".
+ */
+bool t_cpp_generator::is_static_const(t_type* type) {
+  if (type->is_base_type()) {
+    t_base_type::t_base tbase = ((t_base_type*)type)->get_base();
+    switch (tbase) {
+    case t_base_type::TYPE_BOOL:
+    case t_base_type::TYPE_I8:
+    case t_base_type::TYPE_I16:
+    case t_base_type::TYPE_I32:
+    case t_base_type::TYPE_I64:
+    case t_base_type::TYPE_DOUBLE:
+      return true;
+    default:
+      break;
+    }
+  }
+  return false;
 }
 
 /**
@@ -736,6 +865,10 @@ void t_cpp_generator::generate_forward_declaration(t_struct* tstruct) {
  * @param tstruct The struct definition
  */
 void t_cpp_generator::generate_cpp_struct(t_struct* tstruct, bool is_exception) {
+  if (gen_separate_struct_) {
+    generate_cpp_struct_separate_files(tstruct, is_exception);
+    return;
+  }
   generate_struct_declaration(f_types_, tstruct, is_exception, false, true, true, true, true);
   generate_struct_definition(f_types_impl_, f_types_impl_, tstruct);
 
@@ -865,6 +998,64 @@ void t_cpp_generator::generate_assignment_helper(ofstream& out, t_struct* tstruc
   indent(out) << "return *this;" << endl;
   indent_down();
   indent(out) << "}" << endl;
+}
+
+/**
+ * Generates a struct definition for a thrift data type in separate files.
+ * This is a class with data members and a read/write() function,
+ * plus a mirroring isset inner class.
+ *
+ * @param tstruct The struct definition
+ */
+void t_cpp_generator::generate_cpp_struct_separate_files(t_struct* tstruct,
+    bool is_exception) {
+  // generate structs in separate file so as to allow easy overwriting by
+  // custom hand-optimized code if required
+  string f_struct_prefix = program_name_ + "_struct_"
+    + make_valid_filename(tstruct->get_name());
+  string f_struct_filename = get_out_dir() + f_struct_prefix;
+
+  f_struct_.open((f_struct_filename + ".h").c_str());
+  f_struct_impl_.open((f_struct_filename + ".cpp").c_str());
+  if (gen_templates_) {
+    f_struct_tcc_.open((f_struct_filename + ".tcc").c_str());
+  }
+  // initialize the new files
+  init_generator(f_struct_, f_struct_impl_, f_struct_tcc_,
+      f_struct_prefix, false, is_exception);
+
+  generate_struct_declaration(f_struct_, tstruct, is_exception,
+                              false, true, true, true, true);
+  generate_struct_definition(f_struct_impl_, f_struct_impl_, tstruct);
+
+  std::ofstream& out = (gen_templates_ ? f_struct_tcc_ : f_struct_impl_);
+  generate_struct_reader(out, tstruct);
+  generate_struct_writer(out, tstruct);
+  generate_struct_swap(f_struct_impl_, tstruct);
+
+  generate_copy_constructor(f_struct_impl_, tstruct, is_exception);
+  if (gen_moveable_) {
+    generate_move_constructor(f_struct_impl_, tstruct, is_exception);
+  }
+  generate_assignment_operator(f_struct_impl_, tstruct);
+  if (gen_moveable_) {
+    generate_move_assignment_operator(f_struct_impl_, tstruct);
+  }
+  generate_struct_print_method(f_struct_impl_, tstruct);
+  if (is_exception) {
+    generate_exception_what_method(f_struct_impl_, tstruct);
+  }
+
+  // add the new header file to the include file list
+  // so subsequent headers will include it
+  if (is_exception) {
+    program_exception_includes_.push_back(f_struct_prefix + ".h");
+  } else {
+    program_->add_cpp_include(f_struct_prefix + ".h");
+  }
+
+  // finalize and close the files
+  close_generator(f_struct_, f_struct_impl_, f_struct_tcc_, f_struct_prefix);
 }
 
 /**
@@ -1621,8 +1812,32 @@ void t_cpp_generator::generate_service(t_service* tservice) {
     f_header_ << "#include <thrift/async/TAsyncDispatchProcessor.h>" << endl;
   }
   f_header_ << "#include <thrift/async/TConcurrentClientSyncInfo.h>" << endl;
+  if (gen_separate_struct_) {
+    init_includes(f_header_);
+  }
   f_header_ << "#include \"" << get_include_prefix(*get_program()) << program_name_ << "_types.h\""
             << endl;
+
+  // Include custom headers
+  const vector<string>& cpp_includes = program_->get_cpp_includes();
+  for (size_t i = 0; i < cpp_includes.size(); ++i) {
+    if (cpp_includes[i][0] == '<') {
+      f_header_ << "#include " << cpp_includes[i] << endl;
+    } else {
+      f_header_ << "#include \"" << cpp_includes[i] << "\"" << endl;
+    }
+  }
+  f_header_ << endl;
+  // Include exception headers
+  const vector<string>& exception_includes = program_exception_includes_;
+  for (size_t i = 0; i < exception_includes.size(); ++i) {
+    if (exception_includes[i][0] == '<') {
+      f_header_ << "#include " << exception_includes[i] << endl;
+    } else {
+      f_header_ << "#include \"" << exception_includes[i] << "\"" << endl;
+    }
+  }
+  f_header_ << endl;
 
   t_service* extends_service = tservice->get_extends();
   if (extends_service != NULL) {
@@ -4344,6 +4559,43 @@ string t_cpp_generator::type_to_enum(t_type* type) {
   throw "INVALID TYPE IN type_to_enum: " + type->get_name();
 }
 
+/**
+ * Takes a name and produces a valid filename from it.
+ *
+ * Translated from t_java_generator::make_valid_java_identifier
+ *
+ * @param fromName The name which shall become a valid filename
+ * @return The produced identifier
+ */
+std::string t_cpp_generator::make_valid_filename(const std::string& fromName) {
+  std::string str = fromName;
+  if (str.empty()) {
+    return str;
+  }
+
+  // tests rely on this
+  assert(('A' < 'Z') && ('a' < 'z') && ('0' < '9'));
+
+  // if the first letter is a number, we add an additional underscore in front of it
+  char c = str.at(0);
+  if (('0' <= c) && (c <= '9')) {
+    str = "_" + str;
+  }
+
+  // following chars: letter, number or underscore
+  for (size_t i = 0; i < str.size(); ++i) {
+    c = str.at(i);
+    if ((('A' > c) || (c > 'Z')) &&
+        (('a' > c) || (c > 'z')) &&
+        (('0' > c) || (c > '9')) &&
+        ('_' != c)) {
+      str.replace(i, 1, "_");
+    }
+  }
+
+  return str;
+}
+
 string t_cpp_generator::get_include_prefix(const t_program& program) const {
   string include_prefix = program.get_include_prefix();
   if (!use_include_prefix_ || (include_prefix.size() > 0 && include_prefix[0] == '/')) {
@@ -4371,4 +4623,7 @@ THRIFT_REGISTER_GENERATOR(
     "    templates:       Generate templatized reader/writer methods.\n"
     "    pure_enums:      Generate pure enums instead of wrapper classes.\n"
     "    include_prefix:  Use full include paths in generated files.\n"
+    "    struct_separate_files:\n"
+    "                     Generate struct definitions and implementation in\n"
+    "                     separate files instead of common _types header file.\n"
     "    moveable_types:  Generate move constructors and assignment operators.\n")
