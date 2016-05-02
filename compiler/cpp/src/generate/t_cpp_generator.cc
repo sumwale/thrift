@@ -67,6 +67,8 @@ public:
     gen_templates_ = false;
     gen_templates_only_ = false;
     gen_separate_struct_ = false;
+    no_concurrent_client_ = false;
+    no_recursion_limit_ = false;
     gen_moveable_ = false;
     for( iter = parsed_options.begin(); iter != parsed_options.end(); ++iter) {
       if( iter->first.compare("pure_enums") == 0) {
@@ -84,6 +86,10 @@ public:
         gen_templates_only_ = (iter->second == "only");
       } else if( iter->first.compare("struct_separate_files") == 0) {
         gen_separate_struct_ = true;
+      } else if( iter->first.compare("no_concurrent_client") == 0) {
+        no_concurrent_client_ = true;
+      } else if( iter->first.compare("no_recursion_limit") == 0) {
+        no_recursion_limit_ = true;
       } else if( iter->first.compare("moveable_types") == 0) {
         gen_moveable_ = true;
       } else {
@@ -332,6 +338,16 @@ private:
    * of in _types.* files.
    */
   bool gen_separate_struct_;
+
+  /**
+   * True to skip generation of concurrent client.
+   */
+  bool no_concurrent_client_;
+
+  /**
+   * True to skip recursion depth checks in generated code.
+   */
+  bool no_recursion_limit_;
 
   /**
    * The set of exception object headers. Only included by service files.
@@ -1381,8 +1397,11 @@ void t_cpp_generator::generate_struct_reader(ofstream& out, t_struct* tstruct, b
   vector<t_field*>::const_iterator f_iter;
 
   // Declare stack tmp variables
+  if (!no_recursion_limit_) {
+    out << endl
+        << indent() << "apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);";
+  }
   out << endl
-      << indent() << "apache::thrift::protocol::TInputRecursionTracker tracker(*iprot);" << endl
       << indent() << "uint32_t xfer = 0;" << endl
       << indent() << "std::string fname;" << endl
       << indent() << "::apache::thrift::protocol::TType ftype;" << endl
@@ -1506,7 +1525,9 @@ void t_cpp_generator::generate_struct_writer(ofstream& out, t_struct* tstruct, b
 
   out << indent() << "uint32_t xfer = 0;" << endl;
 
-  indent(out) << "apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);" << endl;
+  if (!no_recursion_limit_) {
+    indent(out) << "apache::thrift::protocol::TOutputRecursionTracker tracker(*oprot);" << endl;
+  }
   indent(out) << "xfer += oprot->writeStructBegin(\"" << name << "\");" << endl;
 
   for (f_iter = fields.begin(); f_iter != fields.end(); ++f_iter) {
@@ -1811,7 +1832,9 @@ void t_cpp_generator::generate_service(t_service* tservice) {
   if (gen_cob_style_) {
     f_header_ << "#include <thrift/async/TAsyncDispatchProcessor.h>" << endl;
   }
-  f_header_ << "#include <thrift/async/TConcurrentClientSyncInfo.h>" << endl;
+  if (!no_concurrent_client_) {
+    f_header_ << "#include <thrift/async/TConcurrentClientSyncInfo.h>" << endl;
+  }
   if (gen_separate_struct_) {
     init_includes(f_header_);
   }
@@ -1890,7 +1913,9 @@ void t_cpp_generator::generate_service(t_service* tservice) {
   generate_service_processor(tservice, "");
   generate_service_multiface(tservice);
   generate_service_skeleton(tservice);
-  generate_service_client(tservice, "Concurrent");
+  if (!no_concurrent_client_) {
+    generate_service_client(tservice, "Concurrent");
+  }
 
   // Generate all the cob components
   if (gen_cob_style_) {
@@ -4626,4 +4651,8 @@ THRIFT_REGISTER_GENERATOR(
     "    struct_separate_files:\n"
     "                     Generate struct definitions and implementation in\n"
     "                     separate files instead of common _types header file.\n"
+    "    no_concurrent_client:\n"
+    "                     Omit generating the concurrent client\n"
+    "    no_recursion_limit:\n"
+    "                     Skip checking recursion depth limit in generated code\n"
     "    moveable_types:  Generate move constructors and assignment operators.\n")
