@@ -422,7 +422,6 @@ void t_cpp_generator::init_includes(std::ofstream& f_gen) {
         << endl
         << "#include <thrift/Thrift.h>" << endl
         << "#include <thrift/TApplicationException.h>" << endl
-        << "#include <thrift/TBase.h>" << endl
         << "#include <thrift/protocol/TProtocol.h>" << endl
         << "#include <thrift/transport/TTransport.h>" << endl
         << endl;
@@ -1091,10 +1090,6 @@ void t_cpp_generator::generate_struct_declaration(ofstream& out,
   string extends = "";
   if (is_exception) {
     extends = " : public ::apache::thrift::TException";
-  } else {
-    if (is_user_struct && !gen_templates_) {
-      extends = " : public virtual ::apache::thrift::TBase";
-    }
   }
 
   // Get members
