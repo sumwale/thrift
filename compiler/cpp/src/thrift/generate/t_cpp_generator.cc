@@ -942,6 +942,9 @@ void t_cpp_generator::generate_constructor_helper(ofstream& out,
     out << "(const " << tstruct->get_name() << "& ";
   }
   out << tmp_name << ") ";
+  if (is_move) {
+    out << "noexcept ";
+  }
   if (is_exception)
     out << ": TException() ";
   out << "{" << endl;
@@ -984,11 +987,10 @@ void t_cpp_generator::generate_assignment_helper(ofstream& out, t_struct* tstruc
   indent(out) << tstruct->get_name() << "& " << tstruct->get_name() << "::operator=(";
 
   if (is_move) {
-    out << tstruct->get_name() << "&& ";
+    out << tstruct->get_name() << "&& " << tmp_name << ") noexcept {" << endl;
   } else {
-    out << "const " << tstruct->get_name() << "& ";
+    out << "const " << tstruct->get_name() << "& " << tmp_name << ") {" << endl;
   }
-  out << tmp_name << ") {" << endl;
 
   indent_up();
 
@@ -1151,7 +1153,7 @@ void t_cpp_generator::generate_struct_declaration(ofstream& out,
 
     // Move constructor
     if (gen_moveable_) {
-      indent(out) << tstruct->get_name() << "(" << tstruct->get_name() << "&&);" << endl;
+      indent(out) << tstruct->get_name() << "(" << tstruct->get_name() << "&&) noexcept;" << endl;
     }
 
     // Assignment Operator
@@ -1160,7 +1162,7 @@ void t_cpp_generator::generate_struct_declaration(ofstream& out,
 
     // Move assignment operator
     if (gen_moveable_) {
-      indent(out) << tstruct->get_name() << "& operator=(" << tstruct->get_name() << "&&);" << endl;
+      indent(out) << tstruct->get_name() << "& operator=(" << tstruct->get_name() << "&&) noexcept;" << endl;
     }
 
     // Default constructor
@@ -1207,7 +1209,12 @@ void t_cpp_generator::generate_struct_declaration(ofstream& out,
   }
 
   if (tstruct->annotations_.find("final") == tstruct->annotations_.end()) {
-    out << endl << indent() << "virtual ~" << tstruct->get_name() << "() throw();" << endl;
+    out << endl << indent() << "virtual ~" << tstruct->get_name();
+    if (gen_moveable_) {
+      out << "() noexcept;" << endl;
+    } else {
+      out << "() throw();" << endl;
+    }
   }
 
   // Declare all fields
@@ -1316,7 +1323,7 @@ void t_cpp_generator::generate_struct_declaration(ofstream& out,
   if (swap) {
     // Generate a namespace-scope swap() function
     out << indent() << "void swap(" << tstruct->get_name() << " &a, " << tstruct->get_name()
-        << " &b);" << endl << endl;
+        << " &b) noexcept;" << endl << endl;
   }
 
   if (is_user_struct) {
@@ -1334,8 +1341,12 @@ void t_cpp_generator::generate_struct_definition(ofstream& out,
 
   // Destructor
   if (tstruct->annotations_.find("final") == tstruct->annotations_.end()) {
-    force_cpp_out << endl << indent() << tstruct->get_name() << "::~" << tstruct->get_name()
-                  << "() throw() {" << endl;
+    force_cpp_out << endl << indent() << tstruct->get_name() << "::~" << tstruct->get_name();
+    if (gen_moveable_) {
+      force_cpp_out << "() noexcept {" << endl;
+    } else {
+      force_cpp_out << "() throw() {" << endl;
+    }
     indent_up();
 
     indent_down();
@@ -1638,13 +1649,14 @@ void t_cpp_generator::generate_struct_result_writer(ofstream& out,
  */
 void t_cpp_generator::generate_struct_swap(ofstream& out, t_struct* tstruct) {
   out << indent() << "void swap(" << tstruct->get_name() << " &a, " << tstruct->get_name()
-      << " &b) {" << endl;
+      << " &b) noexcept {" << endl;
   indent_up();
 
   // Let argument-dependent name lookup find the correct swap() function to
   // use based on the argument types.  If none is found in the arguments'
   // namespaces, fall back to ::std::swap().
   out << indent() << "using ::std::swap;" << endl;
+  out << indent() << "static_assert(noexcept(swap(a, b)), \"throwing swap\");" << endl;
 
   bool has_nonrequired_fields = false;
   const vector<t_field*>& fields = tstruct->get_members();
@@ -1699,7 +1711,11 @@ void t_cpp_generator::generate_exception_what_method_decl(std::ofstream& out,
   if (external) {
     out << tstruct->get_name() << "::";
   }
-  out << "what() const throw()";
+  if (gen_moveable_) {
+    out << "what() const noexcept";
+  } else {
+    out << "what() const throw()";
+  }
 }
 
 namespace struct_ostream_operator_generator {
