@@ -69,7 +69,7 @@ public:
 
   /// Use default buffer sizes.
   explicit THeaderTransport(const boost::shared_ptr<TTransport>& transport)
-    : TVirtualTransport(transport),
+    : TVirtualTransport<THeaderTransport, TFramedTransport>(transport),
       outTransport_(transport),
       protoId(T_COMPACT_PROTOCOL),
       clientType(THRIFT_HEADER_CLIENT_TYPE),
@@ -83,7 +83,7 @@ public:
 
   THeaderTransport(const boost::shared_ptr<TTransport> inTransport,
                    const boost::shared_ptr<TTransport> outTransport)
-    : TVirtualTransport(inTransport),
+    : TVirtualTransport<THeaderTransport, TFramedTransport>(inTransport),
       outTransport_(outTransport),
       protoId(T_COMPACT_PROTOCOL),
       clientType(THRIFT_HEADER_CLIENT_TYPE),

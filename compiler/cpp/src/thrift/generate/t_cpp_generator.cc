@@ -1323,7 +1323,7 @@ void t_cpp_generator::generate_struct_declaration(ofstream& out,
   if (swap) {
     // Generate a namespace-scope swap() function
     out << indent() << "void swap(" << tstruct->get_name() << " &a, " << tstruct->get_name()
-        << " &b) noexcept;" << endl << endl;
+        << " &b);" << endl << endl;
   }
 
   if (is_user_struct) {
@@ -1649,14 +1649,13 @@ void t_cpp_generator::generate_struct_result_writer(ofstream& out,
  */
 void t_cpp_generator::generate_struct_swap(ofstream& out, t_struct* tstruct) {
   out << indent() << "void swap(" << tstruct->get_name() << " &a, " << tstruct->get_name()
-      << " &b) noexcept {" << endl;
+      << " &b) {" << endl;
   indent_up();
 
   // Let argument-dependent name lookup find the correct swap() function to
   // use based on the argument types.  If none is found in the arguments'
   // namespaces, fall back to ::std::swap().
   out << indent() << "using ::std::swap;" << endl;
-  out << indent() << "static_assert(noexcept(swap(a, b)), \"throwing swap\");" << endl;
 
   bool has_nonrequired_fields = false;
   const vector<t_field*>& fields = tstruct->get_members();
