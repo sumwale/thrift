@@ -335,7 +335,7 @@ void TSSLSocket::open() {
 */
 void TSSLSocket::close() {
   if (ssl_ != NULL) {
-    try {
+    if (!TSSLSocketFactory::inExit()) try {
       int rc;
       int errno_copy = 0;
       int error = 0;
@@ -847,6 +847,7 @@ unsigned int TSSLSocket::waitForEvent(bool wantRead) {
 uint64_t TSSLSocketFactory::count_ = 0;
 Mutex TSSLSocketFactory::mutex_;
 bool TSSLSocketFactory::manualOpenSSLInitialization_ = false;
+bool TSSLSocketFactory::inExit_ = false;
 
 TSSLSocketFactory::TSSLSocketFactory(SSLProtocol protocol) : server_(false) {
   Guard guard(mutex_);
@@ -971,9 +972,9 @@ void TSSLSocketFactory::loadPrivateKey(const char* path, const char* format) {
 }
 
 void TSSLSocketFactory::loadTrustedCertificates(const char* path, const char* capath) {
-  if (path == NULL) {
+  if (path == NULL && capath == NULL) {
     throw TTransportException(TTransportException::BAD_ARGS,
-                              "loadTrustedCertificates: <path> is NULL");
+                              "loadTrustedCertificates: <path> and <capath> are both NULL");
   }
   if (SSL_CTX_load_verify_locations(ctx_->get(), path, capath) == 0) {
     int errno_copy = THRIFT_GET_SOCKET_ERROR;
