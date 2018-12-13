@@ -71,6 +71,7 @@ public:
     undated_generated_annotations_  = false;
     suppress_generated_annotations_ = false;
     handle_runtime_exceptions_ = false;
+    skip_async_ = false;
     for( iter = parsed_options.begin(); iter != parsed_options.end(); ++iter) {
       if( iter->first.compare("beans") == 0) {
         bean_style_ = true;
@@ -102,6 +103,8 @@ public:
         } else {
           throw "unknown option java:" + iter->first + "=" + iter->second;
         }
+      } else if( iter->first.compare("skip_async") == 0) {
+        skip_async_ = true;
       } else {
         throw "unknown option java:" + iter->first;
       }
@@ -409,7 +412,7 @@ private:
   bool undated_generated_annotations_;
   bool suppress_generated_annotations_;
   bool handle_runtime_exceptions_;
-
+  bool skip_async_;
 };
 
 /**
@@ -2789,11 +2792,17 @@ void t_java_generator::generate_service(t_service* tservice) {
 
   // Generate the three main parts of the service
   generate_service_interface(tservice);
-  generate_service_async_interface(tservice);
+  if (!skip_async_) {
+    generate_service_async_interface(tservice);
+  }
   generate_service_client(tservice);
-  generate_service_async_client(tservice);
+  if (!skip_async_) {
+    generate_service_async_client(tservice);
+  }
   generate_service_server(tservice);
-  generate_service_async_server(tservice);
+  if (!skip_async_) {
+    generate_service_async_server(tservice);
+  }
   generate_service_helpers(tservice);
 
   indent_down();
@@ -5378,4 +5387,7 @@ THRIFT_REGISTER_GENERATOR(
     "set/map.\n"
     "    generated_annotations=[undated|suppress]:\n"
     "                     undated: suppress the date at @Generated annotations\n"
-    "                     suppress: suppress @Generated annotations entirely\n")
+    "                     suppress: suppress @Generated annotations entirely\n"
+    "    skip_async:\n"
+    "                     Skip generating the Asynchronous interfaces, client and server.\n"
+    )

@@ -437,17 +437,10 @@ void TSocket::local_open() {
   std::memset(&hints, 0, sizeof(hints));
   hints.ai_family = PF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
+  hints.ai_flags = AI_PASSIVE;
   sprintf(port, "%d", port_);
 
   error = getaddrinfo(host_.c_str(), port, &hints, &res0);
-
-#ifdef _WIN32
-  if (error == WSANO_DATA) {
-    hints.ai_flags &= ~AI_ADDRCONFIG;
-    error = getaddrinfo(host_.c_str(), port, &hints, &res0);
-  }
-#endif
 
   if (error) {
     string errStr = "TSocket::open() getaddrinfo() " + getSocketInfo()
